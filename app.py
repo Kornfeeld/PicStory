@@ -3,12 +3,62 @@ from PIL import Image, ImageOps, ImageEnhance
 import io
 import base64
 import json
+import os
+from datetime import datetime
 from openai import OpenAI
+
+# --- ORDNER & SPEICHER-SETUP ---
+ALBUMS_DIR = "saved_albums"
+STYLE_FILE = "style_settings.json"
+
+if not os.path.exists(ALBUMS_DIR):
+    os.makedirs(ALBUMS_DIR)
+
+# --- HELFER-FUNKTIONEN FÜR SPEICHERUNG ---
+def load_style_notes():
+    """Lädt gespeicherte Stil-Notizen aus der JSON-Datei"""
+    default_notes = "Ich mag übersichtliche Collagen mit einem dünnen weißen Rand zwischen den Bildern. Bevorzugt abwechslungsreiche Layouts (z. B. ein großes Hauptbild links oder oben und kleinere daneben/darunter). Manche Bilder gerne in Schwarz-Weiß, andere farbenfroh. Keinen Text auf den Bildern."
+    if os.path.exists(STYLE_FILE):
+        try:
+            with open(STYLE_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                return data.get("notes", default_notes)
+        except Exception:
+            return default_notes
+    return default_notes
+
+def save_style_notes(notes):
+    """Speichert die Stil-Notizen dauerhaft auf dem Server"""
+    with open(STYLE_FILE, "w", encoding="utf-8") as f:
+        json.dump({"notes": notes}, f, ensure_ascii=False, indent=2)
+
+def save_album_to_disk(title, date_str, collage_images):
+    """Speichert ein neues Album mit allen Collagen auf der Festplatte"""
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    clean_title = "".join(c for c in title if c.isalnum() or c in (" ", "_", "-")).strip() or "Unbenanntes_Album"
+    folder_name = f"{timestamp}_{clean_title}"
+    album_path = os.path.join(ALBUMS_DIR, folder_name)
+    
+    os.makedirs(album_path, exist_ok=True)
+    
+    # Meta-Infos speichern
+    meta = {
+        "title": title or "Unbenanntes Album",
+        "date": str(date_str),
+        "created_at": datetime.now().strftime("%d.%m.%Y %H:%M")
+    }
+    with open(os.path.join(album_path, "meta.json"), "w", encoding="utf-8") as f:
+        json.dump(meta, f, ensure_ascii=False, indent=2)
+        
+    # Collagen als JPG speichern
+    for idx, img in enumerate(collage_images):
+        file_path = os.path.join(album_path, f"collage_{idx+1}.jpg")
+        img.save(file_path, format="JPEG", quality=95)
 
 # --- SEITEN-KONFIGURATION ---
 st.set_page_config(page_title="MemoryCollage", page_icon="🖼️", layout="wide")
 
-# --- CUSTOM DESIGN (CSS - Base44 Style) ---
+# Custom CSS
 st.markdown("""
     <style>
     .main { background-color: #FAF8F5; }
@@ -26,10 +76,8 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# --- HELFER-FUNKTIONEN ---
-
+# --- BILD-VERARBEITUNG ---
 def image_to_base64_thumbnail(pil_image, max_size=512):
-    """Verkleinert ein Bild im Hintergrund für die sparsame KI-Analyse"""
     img_copy = pil_image.copy()
     img_copy.thumbnail((max_size, max_size))
     buffered = io.BytesIO()
@@ -37,7 +85,6 @@ def image_to_base64_thumbnail(pil_image, max_size=512):
     return base64.b64encode(buffered.getvalue()).decode("utf-8")
 
 def apply_image_filter(img, filter_type):
-    """Wendet fotografische Filter auf das HD-Originalbild an"""
     img = img.copy()
     if filter_type == "bw":
         img = ImageOps.grayscale(img).convert("RGB")
@@ -54,23 +101,16 @@ def apply_image_filter(img, filter_type):
     return img
 
 def create_dynamic_collage(image_specs, original_images, canvas_size=2400, margin=20):
-    """
-    Baut die Collage völlig dynamisch basierend auf den KI-Koordinaten [xmin, ymin, xmax, ymax]
-    im Einheitsquadrat (0.0 bis 1.0) zusammen.
-    """
     collage = Image.new("RGB", (canvas_size, canvas_size), "white")
-    
     for spec in image_specs:
         idx = spec.get("index", 0)
-        box = spec.get("box", [0, 0, 1, 1])  # [xmin, ymin, xmax, ymax]
+        box = spec.get("box", [0, 0, 1, 1])
         filt = spec.get("filter", "normal")
         
         if idx >= len(original_images):
             continue
             
         xmin, ymin, xmax, ymax = box
-        
-        # Umrechnen von Prozent (0.0–1.0) in Pixel-Koordinaten inklusive Abstand/Rand
         px_xmin = int(xmin * canvas_size) + margin
         px_ymin = int(ymin * canvas_size) + margin
         px_xmax = int(xmax * canvas_size) - margin
@@ -79,35 +119,32 @@ def create_dynamic_collage(image_specs, original_images, canvas_size=2400, margi
         w = px_xmax - px_xmin
         h = px_ymax - px_ymin
         
-        # Sicherheitsprüfung für gültige Bildgrößen
         if w <= 20 or h <= 20:
             continue
             
         hd_img = original_images[idx]
         filtered_img = apply_image_filter(hd_img, filt)
-        
-        # Bild exakt auf die dynamisch berechnete Fläche zuschneiden und platzieren
         cropped = ImageOps.fit(filtered_img, (w, h), Image.Resampling.LANCZOS)
         collage.paste(cropped, (px_xmin, px_ymin))
         
     return collage
 
-# --- APP UI ---
+# --- HEADER ---
 st.markdown("### 🖼️ **MemoryCollage**")
 st.caption("Deine Urlaubsbilder, intelligent kuratiert")
 
 st.title("Aus 300 Urlaubsbildern werden wunderschöne Collagen.")
-st.write("Lade die Bilder eines Tages hoch. Die KI wählt die schönsten aus, entwirft dynamische Layouts, legt sanfte Filter drüber und baut hochauflösende Collagen.")
+st.write("Lade die Bilder eines Tages hoch. Die KI wählt die schönsten aus, entwirft dynamische Layouts und baut hochauflösende Collagen.")
 
 st.divider()
 
-# Session State für Stil-Notizen initialisieren
+# Session State & Stil laden
 if "style_notes" not in st.session_state:
-    st.session_state["style_notes"] = "Ich mag übersichtliche Collagen mit einem dünnen weißen Rand zwischen den Bildern. Bevorzugt abwechslungsreiche Layouts (z. B. ein großes Hauptbild links oder oben und kleinere daneben/darunter). Manche Bilder gerne in Schwarz-Weiß, andere farbenfroh. Keinen Text auf den Bildern."
+    st.session_state["style_notes"] = load_style_notes()
 
-tab_album, tab_style = st.tabs(["📸 Neues Album erstellen", "✨ Stil einlernen"])
+tab_album, tab_gallery, tab_style = st.tabs(["📸 Neues Album erstellen", "📚 Meine Alben", "✨ Stil einlernen"])
 
-# TAB 1: ALBUM & DYNAMISCHE COLLAGEN
+# TAB 1: ALBUM ERSTELLEN
 with tab_album:
     st.subheader("1. Album-Details")
     col1, col2 = st.columns(2)
@@ -130,39 +167,25 @@ with tab_album:
                 st.error("Bitte hinterlege zuerst deinen OPENAI_API_KEY in den Streamlit Secrets.")
             else:
                 client = OpenAI(api_key=api_key)
-                st.info(f"{len(vacation_files)} Bilder geladen. Erstelle Vorschaubilder für die KI-Analyse...")
+                st.info(f"{len(vacation_files)} Bilder geladen. Erstelle Vorschaubilder...")
                 
-                # Bilder laden & verkleinerte Vorschaubilder erzeugen
                 original_images = [Image.open(f).convert("RGB") for f in vacation_files]
                 base64_thumbnails = [image_to_base64_thumbnail(img) for img in original_images]
                 
-                # Bis zu 30 Bilder gleichmäßig aus dem Stapel auswählen
                 sample_step = max(1, len(base64_thumbnails) // 30)
                 sampled_indices = list(range(0, len(base64_thumbnails), sample_step))[:30]
                 
-                st.info("GPT-4o mini analysiert Motive und entwirft individuelle, dynamische Layouts...")
+                st.info("GPT-4o mini entwirft individuelle Layouts...")
                 
                 prompt_text = f"""
-Du bist ein professioneller Foto-Kurator und Grafikdesigner. 
-Analysiere die bereitgestellten Urlaubsbilder.
+Du bist ein professioneller Foto-Kurator. Analysiere die Urlaubsbilder.
+STIL-PRÄFERENZEN: "{st.session_state['style_notes']}"
 
-STIL-PRÄFERENZEN DES NUTZERS:
-"{st.session_state['style_notes']}"
+Erstelle einen Plan für exakt {num_collages} Collagen auf einer Fläche [0.0, 0.0, 1.0, 1.0].
+Bilde Rechtecke [xmin, ymin, xmax, ymax]. Keine Lücken, keine Überlappungen.
+Layouts abwechslungsreich gestalten (Hero Left, Hero Top, 3x2, etc.).
 
-Erstelle einen Plan für exakt {num_collages} Collagen.
-Entwirf für JEDE Collage ein dynamisches, maßgeschneidertes Layout auf einer quadratischen Fläche [0.0, 0.0, 1.0, 1.0] (Einheitsquadrat).
-
-REGELN FÜR DAS DYNAMISCHE LAYOUT:
-- Bilde Rechtecke mit der Formel [xmin, ymin, xmax, ymax], wobei alle Werte zwischen 0.0 und 1.0 liegen.
-- Das Quadrat [0.0, 0.0, 1.0, 1.0] muss vollständig und ohne Lücken von den ausgewählten Bildern abgedeckt werden.
-- Die Felder dürfen sich NICHT überlappen.
-- Nutze abwechslungsreiche Layouts, z.B.:
-  * Hero Left (1 großes Bild links [0.0, 0.0, 0.5, 1.0] + 2-4 kleinere rechts)
-  * Hero Top (1 großes Panorama oben [0.0, 0.0, 1.0, 0.5] + 3 kleine unten)
-  * 3x2 Raster (6 Bilder)
-  * Asymmetrisches 3er- oder 5er-Raster
-
-Antworte AUSSCHLIESSLICH im folgenden JSON-Format:
+Antworte NUR in JSON:
 {{
   "collages": [
     {{
@@ -174,9 +197,8 @@ Antworte AUSSCHLIESSLICH im folgenden JSON-Format:
     }}
   ]
 }}
-
-Mögliche Filter: "normal", "vibrant", "bw", "bright".
-Nutze als 'index' nur Indizes aus dieser Liste: {sampled_indices}
+Filter-Optionen: "normal", "vibrant", "bw", "bright".
+Indizes: {sampled_indices}
 """
                 
                 messages_content = [{"type": "text", "text": prompt_text}]
@@ -195,32 +217,68 @@ Nutze als 'index' nur Indizes aus dieser Liste: {sampled_indices}
                     )
                     
                     ki_plan = json.loads(response.choices[0].message.content)
-                    st.success("KI-Layouts erfolgreich entworfen! Rendere HD-Collagen...")
+                    st.success("KI-Layouts entworfen! Rendere und speichere HD-Collagen...")
                     
-                    # Rendern der dynamischen Collagen
+                    generated_collages = []
                     for i, collage_info in enumerate(ki_plan.get("collages", [])):
                         img_specs = collage_info.get("selected_images", [])
-                        
                         if img_specs:
                             final_collage = create_dynamic_collage(img_specs, original_images)
+                            generated_collages.append(final_collage)
                             
                             st.subheader(f"Collage {i+1}")
                             st.image(final_collage, use_column_width=True)
                             
-                            # Download Button
                             buf = io.BytesIO()
                             final_collage.save(buf, format="JPEG", quality=95)
                             st.download_button(f"💾 Collage {i+1} herunterladen (HD)", data=buf.getvalue(), file_name=f"collage_{i+1}.jpg", mime="image/jpeg")
+                    
+                    # ALBUM AUF FESTPLATTE SPEICHERN
+                    if generated_collages:
+                        save_album_to_disk(album_title, album_date, generated_collages)
+                        st.success("🎉 Album wurde erfolgreich in deinen gespeicherten Alben archiviert!")
                             
                 except Exception as e:
                     st.error(f"Fehler bei der Kommunikation mit OpenAI: {e}")
 
-# TAB 2: STIL EINLERNEN
+# TAB 2: GALERIE GESPEICHERTER ALBEN
+with tab_gallery:
+    st.subheader("📚 Gespeicherte Alben")
+    
+    album_folders = sorted(os.listdir(ALBUMS_DIR), reverse=True) if os.path.exists(ALBUMS_DIR) else []
+    valid_albums = [f for f in album_folders if os.path.isdir(os.path.join(ALBUMS_DIR, f))]
+    
+    if not valid_albums:
+        st.info("Noch keine Alben gespeichert. Erstelle dein erstes Album im Reiter 'Neues Album erstellen'!")
+    else:
+        for folder in valid_albums:
+            album_path = os.path.join(ALBUMS_DIR, folder)
+            meta_file = os.path.join(album_path, "meta.json")
+            
+            title = folder
+            created_at = ""
+            if os.path.exists(meta_file):
+                with open(meta_file, "r", encoding="utf-8") as f:
+                    meta_data = json.load(f)
+                    title = meta_data.get("title", title)
+                    created_at = meta_data.get("created_at", "")
+            
+            with st.expander(f"📁 {title} ({created_at})"):
+                images_in_album = [f for f in os.listdir(album_path) if f.endswith(".jpg")]
+                cols = st.columns(min(3, max(1, len(images_in_album))))
+                for idx, img_name in enumerate(sorted(images_in_album)):
+                    img_file_path = os.path.join(album_path, img_name)
+                    img = Image.open(img_file_path)
+                    with cols[idx % len(cols)]:
+                        st.image(img, caption=img_name, use_column_width=True)
+                        buf = io.BytesIO()
+                        img.save(buf, format="JPEG", quality=95)
+                        st.download_button(f"💾 {img_name}", data=buf.getvalue(), file_name=img_name, key=f"{folder}_{img_name}")
+
+# TAB 3: STIL EINLERNEN
 with tab_style:
     st.subheader("Deinen Stil einlernen")
-    st.write("Gib der KI direkte Anweisungen, wie sie deine Collagen arrangieren und bearbeiten soll.")
-    
-    style_files = st.file_uploader("Beispiel-Collagen hochladen (Optional)", accept_multiple_files=True, type=["jpg", "jpeg", "png"], key="style_upload")
+    st.write("Ändere deine Anweisungen an die KI. Deine Notiz wird automatisch gespeichert.")
     
     user_notes = st.text_area(
         "Notiz an die KI", 
@@ -230,4 +288,5 @@ with tab_style:
     
     if st.button("✨ Stil-Profil speichern"):
         st.session_state["style_notes"] = user_notes
-        st.success("Dein Stil-Profil wurde gespeichert! Die KI nutzt diese Anweisungen nun dynamisch für jedes neue Album.")
+        save_style_notes(user_notes)
+        st.success("Dein Stil-Profil wurde dauerhaft gespeichert! Die KI nutzt diese Anweisungen nun für jedes neue Album.")
