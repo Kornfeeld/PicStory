@@ -186,11 +186,20 @@ with tab_album:
                 st.error("Bitte hinterlege zuerst deinen OPENAI_API_KEY in den Streamlit Secrets.")
             else:
                 try:
-                    client = OpenAI(api_key=api_key)
-                    st.info(f"{len(vacation_files)} Bilder geladen. Erstelle Vorschaubilder...")
+                                        client = OpenAI(api_key=api_key)
+                    st.info(f"{len(vacation_files)} Bilder werden speicheroptimiert geladen...")
                     
-                    original_images = [Image.open(f).convert("RGB") for f in vacation_files]
-                    base64_thumbnails = [image_to_base64_thumbnail(img) for img in original_images]
+                    original_images = []
+                    base64_thumbnails = []
+                    
+                    # Bilder einzeln laden, sofort verkleinern und RAM sparen
+                    for f in vacation_files:
+                        compressed_img = load_and_compress_image(f, max_size=1500)
+                        original_images.append(compressed_img)
+                        base64_thumbnails.append(image_to_base64_thumbnail(compressed_img))
+                        
+                    st.success("Bilder erfolgreich geladen! Starte KI-Analyse...")
+
                     
                     sample_step = max(1, len(base64_thumbnails) // 30)
                     sampled_indices = list(range(0, len(base64_thumbnails), sample_step))[:30]
