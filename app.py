@@ -44,7 +44,7 @@ if not os.path.exists(ALBUMS_DIR):
     except Exception:
         pass
 
-# --- HELFER-FUNKTIONEN FÜR SPEICHERUNG ---
+# --- HELFER-FUNKTIONEN ---
 def load_style_notes():
     default_notes = "Ich mag übersichtliche Collagen mit einem dünnen weißen Rand zwischen den Bildern. Bevorzugt abwechslungsreiche Layouts (z. B. ein großes Hauptbild links oder oben und kleinere daneben/darunter). Keinen Text auf den Bildern."
     if os.path.exists(STYLE_FILE):
@@ -85,11 +85,10 @@ def save_album_to_disk(title, date_str, collage_images):
     except Exception as e:
         st.warning(f"Album konnte nicht auf der Festplatte gespeichert werden: {e}")
 
-# --- BILD-VERARBEITUNG ---
+# --- BILD-VERARBEITUNG & RAM-OPTIMIERUNG ---
 def load_and_compress_image(file_obj, max_size=1500):
-    """Lädt das Bild und verkleinert es sofort, um RAM zu sparen."""
+    """Lädt ein Bild und verkleinert es sofort, um Arbeitsspeicher (RAM) zu sparen."""
     img = Image.open(file_obj).convert("RGB")
-    # thumbnail verkleinert das Bild proportional, ohne es zu verzerren
     img.thumbnail((max_size, max_size), Image.Resampling.LANCZOS)
     return img
 
@@ -186,29 +185,28 @@ with tab_album:
                 st.error("Bitte hinterlege zuerst deinen OPENAI_API_KEY in den Streamlit Secrets.")
             else:
                 try:
-                                        client = OpenAI(api_key=api_key)
+                    client = OpenAI(api_key=api_key)
                     st.info(f"{len(vacation_files)} Bilder werden speicheroptimiert geladen...")
                     
                     original_images = []
                     base64_thumbnails = []
                     
-                    # Bilder einzeln laden, sofort verkleinern und RAM sparen
+                    # Speicheroptimiertes Laden direkt beim Einlesen
                     for f in vacation_files:
                         compressed_img = load_and_compress_image(f, max_size=1500)
                         original_images.append(compressed_img)
                         base64_thumbnails.append(image_to_base64_thumbnail(compressed_img))
-                        
-                    st.success("Bilder erfolgreich geladen! Starte KI-Analyse...")
-
                     
                     sample_step = max(1, len(base64_thumbnails) // 30)
                     sampled_indices = list(range(0, len(base64_thumbnails), sample_step))[:30]
                     
                     st.info("GPT-4o mini analysiert Motive & entwirft individuelle Layouts...")
                     
+                    current_notes = load_style_notes()
+                    
                     prompt_text = f"""
 Du bist ein professioneller Foto-Kurator. Analysiere die Urlaubsbilder.
-STIL-PRÄFERENZEN DES NUTZERS: "{st.session_state['style_notes']}"
+STIL-PRÄFERENZEN DES NUTZERS: "{current_notes}"
 
 Erstelle einen Plan für exakt {num_collages} Collagen auf einer Fläche [0.0, 0.0, 1.0, 1.0].
 Bilde Rechtecke [xmin, ymin, xmax, ymax]. Keine Lücken, keine Überlappungen.
@@ -233,7 +231,6 @@ Indizes: {sampled_indices}
                     
                     messages_content = [{"type": "text", "text": prompt_text}]
                     
-                    # Falls Stil-Beispielbilder hochgeladen wurden, hängen wir sie als Referenz an
                     if "style_example_b64s" in st.session_state and st.session_state["style_example_b64s"]:
                         messages_content.append({"type": "text", "text": "HIER SIND BEISPIEL-COLLAGEN FÜR DEN GEWÜNSCHTEN STIL:"})
                         for b64_img in st.session_state["style_example_b64s"]:
@@ -324,24 +321,26 @@ with tab_style:
     
     style_files = st.file_uploader("Beispiel-Collagen als Stilvorlage hochladen", accept_multiple_files=True, type=["jpg", "jpeg", "png"], key="style_upload")
     
+    saved_notes = load_style_notes()
+    
     user_notes = st.text_area(
         "Notiz an die KI", 
-        value=st.session_state["style_notes"],
-        height=140
+        value=saved_notes,
+        height=140,
+        key="style_text_input"
     )
     
     if st.button("✨ Stil-Profil speichern"):
-        st.session_state["style_notes"] = user_notes
         save_style_notes(user_notes)
+        st.session_state["style_notes"] = user_notes
         
-        # Falls Beispiel-Bilder hochgeladen wurden, verkleinern und im Session-State merken
         if style_files:
             b64_list = []
             for f in style_files:
                 img = Image.open(f).convert("RGB")
                 b64_list.append(image_to_base64_thumbnail(img))
             st.session_state["style_example_b64s"] = b64_list
-            st.success(f"Stil-Profil mit {len(style_files)} Beispiel-Bild(ern) gespeichert! Die KI nutzt diese Vorlagen nun als Referenz.")
+            st.success(f"Stil-Profil mit {len(style_files)} Beispiel-Bild(ern) dauerhaft gespeichert!")
         else:
             st.session_state["style_example_b64s"] = []
-            st.success("Stil-Notiz gespeichert!")
+            st.success("Stil-Notiz dauerhaft gespeichert! Die KI nutzt ab jetzt deinen Text.")
