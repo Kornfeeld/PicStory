@@ -86,6 +86,13 @@ def save_album_to_disk(title, date_str, collage_images):
         st.warning(f"Album konnte nicht auf der Festplatte gespeichert werden: {e}")
 
 # --- BILD-VERARBEITUNG ---
+def load_and_compress_image(file_obj, max_size=1500):
+    """Lädt das Bild und verkleinert es sofort, um RAM zu sparen."""
+    img = Image.open(file_obj).convert("RGB")
+    # thumbnail verkleinert das Bild proportional, ohne es zu verzerren
+    img.thumbnail((max_size, max_size), Image.Resampling.LANCZOS)
+    return img
+
 def image_to_base64_thumbnail(pil_image, max_size=512):
     img_copy = pil_image.copy()
     img_copy.thumbnail((max_size, max_size))
